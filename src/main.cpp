@@ -9,32 +9,29 @@
 #include <stdlib.h>
 #include <regex>
 #include <sstream>
+#include <exception>
 
 using json = nlohmann::json;
 
-
-void splitLine(std::vector<std::string> &vec, const std::string line, const char delimeters) {
-    int j = 0;
-    int count = 0;
-    while (j < line.size()) {
-        std::string sub_str = "";
-        int i = j;
-        while ((line[i] != delimeters) && (i < line.size())) {
-            sub_str += line[i];
-            i++;
-            count++;
-        }
-        if (count > 0) {
-            vec.push_back(sub_str);
-        }
-        count = 0;
-        j=i+1;
+class error : public std::exception
+{
+public:
+    error(const std::string& message) : message{ message }
+    {}
+    const char* what() const noexcept override
+    {
+        return message.c_str();     // получаем из std::string строку const char*
     }
-}
+private:
+    std::string message;    // сообщение об ошибке
+};
+
+void splitLine(std::vector<std::string>& vec, const std::string line, const char delimeters);
 template<class T>
-bool in_range(const T t, T min, T max) {
-    return t >= min && t <= max;
-}
+bool in_range(const T t, const T min, const T max);
+json getFile(const std::string file);
+void toFile(const std::string file, json data);
+void checkOptions(std::vector<std::string>& argv, int& argc, const std::map < std::string, int >& commands, const int count, const bool exist);
 
 void help(int argc, std::vector<std::string> argv);
 void info(int argc, std::vector<std::string> argv);
@@ -57,6 +54,8 @@ int main() {
 
         argc = argv.size();
 
+        
+
         std::map < std::string, std::function<void(int argc, std::vector<std::string> argv)>> map = {
         {"help", help},
         {"info", info},
@@ -67,7 +66,16 @@ int main() {
         };
 
         if (map.find(argv[0]) != map.end()) {
-            map[argv[0]](argc, argv);
+            try
+            {
+                map[argv[0]](argc, argv);
+            }
+            catch (const error& err) {
+                std::cout << err.what() << std::endl;
+            }
+            catch (const std::exception ex) {
+                std::cout << ex.what() << std::endl;
+            }
         }
         else {
             std::cout << "Команда не найдена\nВведите help для помощи\n\n";
@@ -76,11 +84,106 @@ int main() {
         argc = 0;
         argv.clear();
     }
+    
 
     system("pause");
     return 0;
 }
 
+void splitLine(std::vector<std::string>& vec, const std::string line, const char delimeters) {
+    if (line == "") {
+        throw error("Ошибка!\nВы не ввели команду!\n");
+    }
+    int j = 0;
+    int count = 0;
+    while (j < line.size()) {
+        std::string sub_str = "";
+        int i = j;
+        while ((line[i] != delimeters) && (i < line.size())) {
+            sub_str += line[i];
+            i++;
+            count++;
+        }
+        if (count > 0) {
+            vec.push_back(sub_str);
+        }
+        count = 0;
+        j = i + 1;
+    }
+}
+template<class T>
+bool in_range(const T t, const T min, const T max) {
+    return t >= min && t <= max;
+}
+json getFile(const std::string file) {
+    json data;
+    std::ifstream input(file);
+    if (input.is_open()) {
+        if (!(input.peek() == -1)) {
+            input >> data;
+        }
+        input.close();
+        return data;
+    }
+    else {
+        throw error("Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n");
+    }
+
+    
+}
+void toFile(const std::string file, json data) {
+    std::ofstream output(file);
+    if (!output.is_open())
+    {
+        throw error("Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n");
+    }
+    output << data.dump(4);
+    output.close();
+}
+void checkOptions(std::vector<std::string>& argv, int& argc, const std::map<std::string, int>& commands, const int count, const bool exist) {
+    for (int i = count; i < argv.size() - 1; i++) {
+        if (argv[i][0] == '-')
+                continue;
+        if (argv[i + 1][0] != '-') {
+            argv[i] += (" " + argv[i + 1]);
+            argv.erase(argv.begin() + i + 1);
+            i--;
+        }
+    }
+    argc = argv.size();
+
+    /*for (int i = 0; i < argc; i++) {
+        std::cout << argv[i] << std::endl;
+    }*/
+    int c = 0;
+    for (int i = count; i < argc; i++) {
+        auto iter = commands.find(argv[i]);
+        c++;
+        if (iter == commands.end()) {
+            throw error("Ошибка!\nОпции " + argv[i] + " не существует!\n");
+        }
+        else {
+            int option_argc = 0;
+            if ((i + 1) < argc) {
+                if (argv[i + 1][0] == '-') {
+                    continue;
+                }
+                std::vector<std::string> option_argv = {};
+                splitLine(option_argv, argv[i + 1], ' ');
+                option_argc = option_argv.size();
+            }
+            if (option_argc != iter->second) {
+                throw error("Ошибка!\nНекорректное количество аргументов опции " + argv[i] + "\n");
+            }
+            else {
+                i++;
+            }
+        }
+    }
+    if (exist && c == 0) {
+        throw error("Ошибка!\nНедостаточно опций\n");
+    }
+}
 
 void help(int argc, std::vector<std::string> argv) {
     std::cout <<std::setw(20) << std::left << "info" << std::setw(20) << "Получение информации\n";
@@ -100,34 +203,26 @@ void info(int argc, std::vector<std::string> argv) {
             << "\t[-s | --savings]" << "\tИнформация о накоплениях\n\n";
         return;
     }
+    std::map < std::string, int > options = {
+            {"-a", 0},
+            {"-e", 0},
+            {"--expense", 0},
+            {"-s", 0},
+            {"--savings", 0},
+    };
 
-    if ((std::find(argv.begin(), argv.end(), "-a") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-e") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--expense") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-s") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--savings") == argv.end()))
-    {
-        std::cerr << "Ошибка!\nНеверные аргументы или их недостаточно\n\n";
-        return;
+    if (argc > 1 && argv[1][0] != '-') {
+        checkOptions(argv, argc, options, 2, true);
+    }
+    else {
+        checkOptions(argv, argc, options, 1, true);
     }
 
     int i_begin = -1;
     int i_end = -1;
 
-    std::regex pattern(R"(^-([a-zA-Z]+|--[a-zA-Z]+)$)");
-    if (!std::regex_match(argv[1], pattern)) {
-        json data;
-        std::ifstream input("data.json");
-        if (input.is_open()) {
-            if (!(input.peek() == -1)) {
-                input >> data;
-            }
-            input.close();
-        }
-        else {
-            std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-            return;
-        }
+    if ((argc > 1 && argv[1][0] != '-')) {
+        json data = getFile("data.json");
 
         for (int i = 0; i < data["Expense"].size(); i++) {
             if (data["Expense"][i]["name"] == argv[1]) {
@@ -138,8 +233,7 @@ void info(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1) {
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
@@ -151,25 +245,15 @@ void info(int argc, std::vector<std::string> argv) {
     std::cout << time_line << std::endl << std::endl;
 
     if ((std::find(argv.begin(), argv.end(), "-a") != argv.end()) || (std::find(argv.begin(), argv.end(), "--savings") != argv.end()) || (std::find(argv.begin(), argv.end(), "-s") != argv.end())) {
-        json data;
-        std::ifstream input("data.json");
-        if (input.is_open()) {
-            if (!(input.peek() == -1)) {
-                input >> data;
-            }
-            input.close();
-        }
-        else {
-            std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-            return;
-        }
+        
+        json data = getFile("data.json");
         
         if (data["Expense"].size() == 0) {
             std::cout << "Покупок не запланированно\n\n";
         }
         else {
             int sum = 0;
-            std::cout << "Название" << "\t    " << "Сбережение" << "\t     " << "Остаток" << "\t      " << "Накопленно\n";
+            std::cout << "Название" << "\t    " << "Отложить" << "\t     " << "Остаток" << "\t      " << "Накопленно\n";
             if (i_begin == -1 || i_end == -1) {
                 i_begin = 0;
                 i_end = data["Expense"].size();
@@ -204,34 +288,14 @@ void info(int argc, std::vector<std::string> argv) {
             }
             std::cout << "\nВ этом месяце требуется отложить " << sum << " руб\n\n";
 
-            std::ofstream output("data.json");
-            if (!output.is_open())
-            {
-                std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-                return;
-            }
-            output << data.dump(4);
+            toFile("data.json", data);
         }
 
     }
 
     if ((std::find(argv.begin(), argv.end(), "-a") != argv.end()) || (std::find(argv.begin(), argv.end(), "-e") != argv.end()) || (std::find(argv.begin(), argv.end(), "--expense") != argv.end())) {
 
-        json data;
-        std::ifstream input("data.json");
-        if (input.is_open()) {
-            if (!(input.peek() == -1)) {
-                input >> data;
-            }
-            else {
-                data = "";
-            }
-            input.close();
-        }
-        else {
-            std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-            return;
-        }
+        json data = getFile("data.json");
 
         if (!data.contains("Expense")) {
             std::cout << "Покупок не запланированно\n";
@@ -251,12 +315,17 @@ void info(int argc, std::vector<std::string> argv) {
 void addExpense(int argc, std::vector<std::string> argv) {
 
     if (argc == 1) {
-        std::cout << "Добавление покупки в планировщик\n\naddExpense <name> <price> <date> <description> [-sd | --startdate]\n\nАргументы\n\t<name>\t\t\t\t\tНазвание покупки\n\t<price>\t\t\t\t\tСтоимость покупки\n\t<date>\t\t\t\t\tДата планируемого совершения покупки\n\t<description>\t\t\t\tОписание покупки\n\nОпции\n\t[-sd | --startdate] <start date>\tДата, с которой вы планируете начать копить\n\n";
+        std::cout << "Добавление покупки в планировщик\n\naddExpense <name> <price> <date> <description>[-sd | --startdate]\n\nАргументы\n"
+            << "\t<name>\t\t\t\t\tНазвание покупки\n"
+            << "\t<price>\t\t\t\t\tСтоимость покупки\n"
+            << "\t<date>\t\t\t\t\tДата планируемого совершения покупки\n"
+            << "\t<description>\t\t\t\tОписание покупки\n\n"
+            << "Опции\n"
+            << "\t[-sd | --startdate] <start date>\tДата, с которой вы планируете начать копить\n\n";
         return;
     }
     if (argc < 5) {
-        std::cerr << "Ошибка!\nнедостаточно аргументов\n\n";
-        return;
+        throw error("Ошибка!\nнедостаточно аргументов\n");
     }
 
     for (int i = 5; i < argc; i++) {
@@ -266,13 +335,14 @@ void addExpense(int argc, std::vector<std::string> argv) {
         argv.erase(argv.begin() + 5);
     }
 
-    if (((std::find(argv.begin() + 5, argv.end(), "-sd") == argv.end()) &&
-        (std::find(argv.begin() + 5, argv.end(), "--startdate") == argv.end())) &&
-        (argv.size() > 5))
-    {
-        std::cerr << "Ошибка!\nНеправильные опции\n\n";
-        return;
-    }
+    std::map < std::string, int > options = {
+            {"-sd", 1},
+            {"--startdate", 1}
+    };
+
+    checkOptions(argv, argc, options, 5, false);
+
+
 
     time_t seconds = time(NULL);
     tm* timeinfo = localtime(&seconds);
@@ -308,8 +378,7 @@ void addExpense(int argc, std::vector<std::string> argv) {
         object["price"] = atoi(argv[2].c_str());
     }
     else {
-        std::cerr << "Ошибка!\nСтоимость должна состоять только из цифр\n\n";
-        return;
+        throw error("Ошибка!\nСтоимость должна состоять только из цифр\n");
     }
 
     std::vector<std::string> date_vec{};
@@ -329,8 +398,7 @@ void addExpense(int argc, std::vector<std::string> argv) {
         object["date"] = argv[3];
     }
     else {
-        std::cerr << "Ошибка!\nДата введена не правильно\nДата должна быть в будущем минимум на 1 месяц\nФормат даты:    dd.mm.yyyy\n\n";
-        return;
+        throw error("Ошибка!\nДата введена не правильно\nДата должна быть в будущем минимум на 1 месяц\nФормат даты:    dd.mm.yyyy\n");
     }
 
     object["description"] = argv[4];
@@ -346,8 +414,7 @@ void addExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 5, argv.end(), "--startdate");
         }
         if (iter == --argv.end()) {
-            std::cerr << "Ошибка!\nВведите дату начала накопления\n\n";
-            return;
+            throw error("Ошибка!\nВведите дату начала накопления\n");
         }
 
         std::string start_date = *(++iter);
@@ -369,8 +436,7 @@ void addExpense(int argc, std::vector<std::string> argv) {
             
         }
         else {
-            std::cerr << "Ошибка!\nДата введена не правильно\nФормат даты:    dd.mm.yyyy\n\n";
-            return;
+            throw error("Ошибка!\nДата введена не правильно\nФормат даты:    dd.mm.yyyy\n");
         }
     }
     else {
@@ -385,25 +451,9 @@ void addExpense(int argc, std::vector<std::string> argv) {
     data["Expense"].push_back(object);
 
     
-    std::ofstream output("data.json");
-    if (!output.is_open())
-    {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
-    output << data.dump(4);
-    output.close();
+    toFile("data.json", data);
 
-    std::ifstream inputChek("data.json");
-    if (!inputChek.is_open())
-    {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
-    if (!(input.peek() == -1)) {
-        inputChek >> data;
-    }
-    inputChek.close();
+    data = getFile("data.json");
     std::cout << "Покупка добавлена!\n";
     std::cout << "Название:\t\t" << (std::string)data["Expense"].back()["name"] << std::endl;
     std::cout << "Стоимость:\t\t" << data["Expense"].back()["price"] << std::endl;
@@ -428,42 +478,30 @@ void editExpense(int argc, std::vector<std::string> argv) {
         return;
     }
 
-    if ((std::find(argv.begin(), argv.end(), "-p") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--price") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-t") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--time") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-d") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--description") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-sd") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--startdate") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-ac") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--accumulated") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-df") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--difference") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "-n") == argv.end()) &&
-        (std::find(argv.begin(), argv.end(), "--name") == argv.end()))
-    {
-        std::cerr << "Ошибка!\nНеверные опции или их нет\n\n";
-        return;
-    }
-
     if (argc < 2 || argv[1][0] == '-') {
-        std::cerr << "Ошибка!\nНедостаточно аргументов\n\n";
-        return;
+        throw error("Ошибка!\nНедостаточно аргументов\n");
     }
 
-    json data;
-    std::ifstream input("data.json");
-    if (input.is_open()) {
-        if (!(input.peek() == -1)) {
-            input >> data;
-        }
-        input.close();
-    }
-    else {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-        return;
-    }
+    std::map < std::string, int > options = {
+            {"-p", 1},
+            {"--price", 1},
+            {"-t", 1},
+            {"--time", 1},
+            {"-d", 1},
+            {"--description", 1},
+            {"-sd", 1},
+            {"--startdate", 1},
+            {"-ac", 1},
+            {"--accumulated", 1},
+            {"-df", 1},
+            {"--difference", 1},
+            {"-n", 1},
+            {"--name", 1},
+    };
+
+    checkOptions(argv, argc, options, 2, true);
+
+    json data = getFile("data.json");
 
     time_t seconds = time(NULL);
     tm* timeinfo = localtime(&seconds);
@@ -483,16 +521,14 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--price");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новую стоимость\n\n";
-            return;
+            throw error("Ошибка!\nВведите новую стоимость\n");
         }
         --iter;
 
         std::string new_price = *(++iter);
 
         if (!regex_match(new_price, num)) {
-            std::cerr << "Ошибка!\nСтоимость должна состоять только из цифр\n\n";
-            return;
+            throw error("Ошибка!\nСтоимость должна состоять только из цифр\n");
         }
 
         for (int i = 0; i < data["Expense"].size(); i++) {
@@ -505,8 +541,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1) {
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
@@ -521,8 +556,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--time");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новую дату покупки\n\n";
-            return;
+            throw error("Ошибка!\nВведите новую дату покупки\n");
         }
         --iter;
 
@@ -549,17 +583,15 @@ void editExpense(int argc, std::vector<std::string> argv) {
                     cout.push_back("Дата покупки изменена\n" + old_time + " -> " + new_time);
                     break;
                 }
-                else if (i != data["Expense"].size() - 1) {
-                    continue;
+                else if (i == data["Expense"].size() - 1) {
+                    throw error("Ошибка!\nТакой покупки не существует\n");
                 }
-                std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-                return;
+                continue;
             }
 
         }
         else {
-            std::cerr << "Ошибка!\nДата введена не правильно\nДата должна быть в будущем минимум на 1 месяц\nФормат даты:    dd.mm.yyyy\n\n";
-            return;
+            throw error("Ошибка!\nДата введена не правильно\nДата должна быть в будущем минимум на 1 месяц\nФормат даты:    dd.mm.yyyy\n");
         }
 
     }
@@ -575,8 +607,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--description");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новое описание\n\n";
-            return;
+            throw error("Ошибка!\nВведите новое описание\n");
         }
         --iter;
 
@@ -604,8 +635,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1) {
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
@@ -620,8 +650,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--startdate");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новую дату покупки\n\n";
-            return;
+            throw error("Ошибка!\nВведите новую дату покупки\n");
         }
         --iter;
 
@@ -650,14 +679,12 @@ void editExpense(int argc, std::vector<std::string> argv) {
                 else if (i != data["Expense"].size() - 1) {
                     continue;
                 }
-                std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-                return;
+                throw error("Ошибка!\nТакой покупки не существует\n");
             }
 
         }
         else {
-            std::cerr << "Ошибка!\nДата введена не правильно\nФормат даты:    dd.mm.yyyy\n\n";
-            return;
+            throw error("Ошибка!\nДата введена не правильно\nФормат даты:    dd.mm.yyyy\n");
         }
 
     }
@@ -673,16 +700,14 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--accumulated");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новое накопление\n\n";
-            return;
+            throw error("Ошибка!\nВведите новое накопление\n");
         }
         --iter;
 
         std::string new_accumulated = *(++iter);
 
         if (!regex_match(new_accumulated, num)) {
-            std::cerr << "Ошибка!\nСумма накопления должна состоять только из цифр\n\n";
-            return;
+            throw error("Ошибка!\nСумма накопления должна состоять только из цифр\n");
         }
 
         for (int i = 0; i < data["Expense"].size(); i++) {
@@ -695,8 +720,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1) {
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
@@ -711,16 +735,14 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--difference");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите разницу\n\n";
-            return;
+            throw error("Ошибка!\nВведите разницу\n");
         }
         --iter;
 
         std::string new_accumulated = *(++iter);
 
         if (!regex_match(new_accumulated, num)) {
-            std::cerr << "Ошибка!\nРазница должна состоять только из цифр\n\n";
-            return;
+            throw error("Ошибка!\nРазница должна состоять только из цифр\n");
         }
 
         for (int i = 0; i < data["Expense"].size(); i++) {
@@ -733,8 +755,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1) {
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
@@ -749,8 +770,7 @@ void editExpense(int argc, std::vector<std::string> argv) {
             iter = std::find(argv.begin() + 2, argv.end(), "--name");
         }
         if (iter == --argv.end() || std::regex_match((*(++iter)), pattern)) {
-            std::cerr << "Ошибка!\nВведите новое название\n\n";
-            return;
+            throw error("Ошибка!\nВведите новое название\n");
         }
         --iter;
 
@@ -765,19 +785,11 @@ void editExpense(int argc, std::vector<std::string> argv) {
             else if (i != data["Expense"].size() - 1){
                 continue;
             }
-            std::cout << "Ошибка!\nТакой покупки не существует\n\n";
-            return;
+            throw error("Ошибка!\nТакой покупки не существует\n");
         }
     }
 
-    std::ofstream output("data.json");
-    if (!output.is_open())
-    {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n\n";
-        return;
-    }
-    output << data.dump(4);
-    output.close();
+    toFile("data.json", data);
 
     std::cout << "Покупка " << argv[1] << " успешно изменена!\n\n";
     for (int i = 0; i < cout.size(); i++) {
@@ -798,33 +810,19 @@ void delite(int argc, std::vector<std::string> argv) {
     }
 
     if (argc < 2) {
-        std::cerr << "Ошибка!\nНедостаточно аргументов\n\n";
-        return;
+        throw error("Ошибка!\nНедостаточно аргументов\n");
     }
 
-    json data;
-    std::ifstream input("data.json");
-    if (input.is_open()) {
-        if (!(input.peek() == -1)) {
-            input >> data;
-        }
-        input.close();
-    }
-    else {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
+    json data = getFile("data.json");
 
     std::regex num("[0-9]*");
 
     if (!regex_match(argv[1], num)) {
-        std::cerr << "Ошибка!\nНомер должен состоять только из цифр\n\n";
-        return;
+        throw error("Ошибка!\nНомер должен состоять только из цифр\n");
     }
 
     if (atoi(argv[1].c_str()) > data["Expense"].size() - 1 || atoi(argv[1].c_str()) < 0) {
-        std::cerr << "Ошибка!\nПокупки с таким номером не существует\n\n";
-        return;
+        throw error("Ошибка!\nПокупки с таким номером не существует\n");
     }
 
     memory_object = data["Expense"][atoi(argv[1].c_str())];
@@ -832,14 +830,7 @@ void delite(int argc, std::vector<std::string> argv) {
 
     data["Expense"].erase(atoi(argv[1].c_str()));
 
-    std::ofstream output("data.json");
-    if (!output.is_open())
-    {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
-    output << data.dump(4);
-    output.close();
+    toFile("data.json", data);
 
     std::cout << "Трата " << (std::string)memory_object["name"] << " успешно удалена!\nЕсли вы хотите вернуть трату то используйте команду remove\n\n";  
 }
@@ -847,22 +838,10 @@ void delite(int argc, std::vector<std::string> argv) {
 void removeObj(int argc, std::vector<std::string> argv) {
 
     if (memory_object == nullptr) {
-        std::cerr << "В памяти ничего не сохранено\n\n";
-        return;
+        throw error("В памяти ничего не сохранено\n");
     }
 
-    json data;
-    std::ifstream input("data.json");
-    if (input.is_open()) {
-        if (!(input.peek() == -1)) {
-            input >> data;
-        }
-        input.close();
-    }
-    else {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
+    json data = getFile("data.json");
 
     json tmp;
 
@@ -880,14 +859,7 @@ void removeObj(int argc, std::vector<std::string> argv) {
         }
     }
 
-    std::ofstream output("data.json");
-    if (!output.is_open())
-    {
-        std::cerr << "Ошибка!\nНе удалось открыть файл data.json или вы ничего не запланировали\n";
-        return;
-    }
-    output << data.dump(4);
-    output.close();
+    toFile("data.json", data);
 
     std::cout << "Трата " << (std::string)data["Expense"][memory_iter]["name"] << " успешно восстановлена!\n\n";
 
